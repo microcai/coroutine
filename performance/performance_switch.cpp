@@ -10,16 +10,13 @@
 #include <string>
 
 #include <boost/chrono.hpp>
-#include <boost/coroutine/all.hpp>
+#include <boost/coroutine/coroutine.hpp>
 #include <boost/cstdint.hpp>
 #include <boost/program_options.hpp>
 
 #include "bind_processor.hpp"
 #include "clock.hpp"
 #include "cycle.hpp"
-
-boost::coroutines::flag_fpu_t preserve_fpu = boost::coroutines::fpu_not_preserved;
-boost::uint64_t jobs = 1000;
 
 struct X
 {
@@ -30,22 +27,28 @@ struct X
     {}
 };
 
+typedef boost::coroutines::coroutine< void() >  coro_void_t;
+typedef boost::coroutines::coroutine< int() >   coro_int_t;
+typedef boost::coroutines::coroutine< X() >     coro_x_t;
+
+boost::uint64_t jobs = 1000;
+
 const X x("abc");
 
-void fn_void( boost::coroutines::coroutine< void >::push_type & c)
-{ while ( true) c(); }
+void fn_void( coro_void_t::self & c)
+{ while ( true) c.yield(); }
 
-void fn_int( boost::coroutines::coroutine< int >::push_type & c)
-{ while ( true) c( 7); }
+int fn_int( coro_int_t::self & c)
+{ while ( true) c.yield( 7); }
 
-void fn_x( boost::coroutines::coroutine< X >::push_type & c)
+X fn_x( coro_x_t::self & c)
 {
-    while ( true) c( x);
+    while ( true) c.yield( x);
 }
 
 duration_type measure_time_void()
 {
-    boost::coroutines::coroutine< void >::pull_type c( fn_void, boost::coroutines::attributes( preserve_fpu) );
+    coro_void_t c( fn_void);
 
     // cache warum-up
     c();
@@ -64,7 +67,7 @@ duration_type measure_time_void()
 
 duration_type measure_time_int()
 {
-    boost::coroutines::coroutine< int >::pull_type c( fn_int, boost::coroutines::attributes( preserve_fpu) );
+    coro_int_t c( fn_int);
 
     // cache warum-up
     c();
@@ -83,7 +86,7 @@ duration_type measure_time_int()
 
 duration_type measure_time_x()
 {
-    boost::coroutines::coroutine< X >::pull_type c( fn_x, boost::coroutines::attributes( preserve_fpu) );
+    coro_x_t c( fn_x);
 
     // cache warum-up
     c();
@@ -103,7 +106,7 @@ duration_type measure_time_x()
 # ifdef BOOST_CONTEXT_CYCLE
 cycle_type measure_cycles_void()
 {
-    boost::coroutines::coroutine< void >::pull_type c( fn_void, boost::coroutines::attributes( preserve_fpu) );
+    coro_void_t c( fn_void);
 
     // cache warum-up
     c();
@@ -122,7 +125,7 @@ cycle_type measure_cycles_void()
 
 cycle_type measure_cycles_int()
 {
-    boost::coroutines::coroutine< int >::pull_type c( fn_int, boost::coroutines::attributes( preserve_fpu) );
+    coro_int_t c( fn_int);
 
     // cache warum-up
     c();
@@ -141,7 +144,7 @@ cycle_type measure_cycles_int()
 
 cycle_type measure_cycles_x()
 {
-    boost::coroutines::coroutine< X >::pull_type c( fn_x, boost::coroutines::attributes( preserve_fpu) );
+    coro_x_t c( fn_x);
 
     // cache warum-up
     c();
@@ -165,11 +168,9 @@ int main( int argc, char * argv[])
     {
         bind_to_processor( 0);
 
-        bool preserve = false;
         boost::program_options::options_description desc("allowed options");
         desc.add_options()
             ("help", "help message")
-            ("fpu,f", boost::program_options::value< bool >( & preserve), "preserve FPU registers")
             ("jobs,j", boost::program_options::value< boost::uint64_t >( & jobs), "jobs to run");
 
         boost::program_options::variables_map vm;
@@ -185,8 +186,6 @@ int main( int argc, char * argv[])
             std::cout << desc << std::endl;
             return EXIT_SUCCESS;
         }
-
-        if ( preserve) preserve_fpu = boost::coroutines::fpu_preserved;
 
         boost::uint64_t res = measure_time_void().count();
         std::cout << "void: average of " << res << " nano seconds" << std::endl;

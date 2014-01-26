@@ -1,2343 +1,299 @@
+//  Copyright (c) 2006, Giovanni P. Deretta
+//
+//  This code may be used under either of the following two licences:
+//
+//  Permission is hereby granted, free of charge, to any person obtaining a copy 
+//  of this software and associated documentation files (the "Software"), to deal 
+//  in the Software without restriction, including without limitation the rights 
+//  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell 
+//  copies of the Software, and to permit persons to whom the Software is 
+//  furnished to do so, subject to the following conditions:
+//
+//  The above copyright notice and this permission notice shall be included in 
+//  all copies or substantial portions of the Software.
+//
+//  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
+//  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
+//  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL 
+//  THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
+//  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, 
+//  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN 
+//  THE SOFTWARE. OF SUCH DAMAGE.
+//
+//  Or:
+//
+//  Distributed under the Boost Software License, Version 1.0.
+//  (See accompanying file LICENSE_1_0.txt or copy at
+//  http://www.boost.org/LICENSE_1_0.txt)
 
-//          Copyright Oliver Kowalke 2009.
-// Distributed under the Boost Software License, Version 1.0.
-//    (See accompanying file LICENSE_1_0.txt or copy at
-//          http://www.boost.org/LICENSE_1_0.txt)
-
-#ifndef BOOST_COROUTINES_COROUTINE_H
-#define BOOST_COROUTINES_COROUTINE_H
-
+#ifndef BOOST_COROUTINE_COROUTINE_HPP_20060512
+#define BOOST_COROUTINE_COROUTINE_HPP_20060512
+// default_context_impl.hpp must be first for weird Apple bug
+#include <boost/coroutine/detail/default_context_impl.hpp>
 #include <cstddef>
-#include <iterator>
-#include <memory>
-
-#include <boost/assert.hpp>
-#include <boost/config.hpp>
-#include <boost/move/move.hpp>
-#include <boost/range.hpp>
-#include <boost/throw_exception.hpp>
-#include <boost/type_traits/decay.hpp>
-#include <boost/type_traits/function_traits.hpp>
-#include <boost/type_traits/is_convertible.hpp>
-#include <boost/type_traits/is_same.hpp>
+#include <boost/preprocessor/repetition.hpp>
+#include <boost/tuple/tuple.hpp>
 #include <boost/utility/enable_if.hpp>
-#include <boost/utility/explicit_operator_bool.hpp>
+#include <boost/mpl/vector.hpp>
+#include <boost/type_traits.hpp>
+#include <boost/call_traits.hpp>
+#include <boost/coroutine/detail/arg_max.hpp>
+#include <boost/coroutine/detail/coroutine_impl.hpp>
+#include <boost/coroutine/detail/is_callable.hpp>
+#include <boost/coroutine/detail/argument_packer.hpp>
+#include <boost/coroutine/detail/argument_unpacker.hpp>
+#include <boost/coroutine/detail/signature.hpp>
+#include <boost/coroutine/detail/index.hpp>
+#include <boost/coroutine/detail/coroutine_traits.hpp>
+#include <boost/coroutine/detail/coroutine_accessor.hpp>
+#include <boost/coroutine/move.hpp>
+#include <boost/coroutine/detail/fix_result.hpp>
+#include <boost/coroutine/detail/self.hpp>
 
-#include <boost/coroutine/attributes.hpp>
-#include <boost/coroutine/detail/config.hpp>
-#include <boost/coroutine/detail/coroutine_context.hpp>
-#include <boost/coroutine/exceptions.hpp>
-#include <boost/coroutine/stack_allocator.hpp>
-#include <boost/coroutine/detail/pull_coroutine_base.hpp>
-#include <boost/coroutine/detail/pull_coroutine_caller.hpp>
-#include <boost/coroutine/detail/pull_coroutine_object.hpp>
-#include <boost/coroutine/detail/push_coroutine_base.hpp>
-#include <boost/coroutine/detail/push_coroutine_caller.hpp>
-#include <boost/coroutine/detail/push_coroutine_object.hpp>
+namespace boost { namespace coroutines {
+  namespace detail {
+    template<typename T>
+    struct optional_result_type : 
+      boost::mpl::if_<boost::is_same<T, void>,
+		      void,
+		      boost::optional<T> > { };
 
-#ifdef BOOST_HAS_ABI_HEADERS
-#  include BOOST_ABI_PREFIX
-#endif
+    template<typename T>
+    BOOST_DEDUCED_TYPENAME
+    boost::enable_if<boost::is_same<T, void> >::type
+    optional_result() {}
 
-namespace boost {
-namespace coroutines {
+    template<typename T>
+    BOOST_DEDUCED_TYPENAME
+    boost::disable_if<boost::is_same<T, void>,
+		      BOOST_DEDUCED_TYPENAME
+		      optional_result_type<T>::type
+		      >::type
+    optional_result() {
+      return BOOST_DEDUCED_TYPENAME
+	optional_result_type<T>::type();
+    }
+  }
 
-template< typename Arg >
-class pull_coroutine;
+  template<typename Signature, typename Context>
+  class coroutine;
 
-template< typename Arg >
-class push_coroutine
-{
-private:
-    template<
-        typename X, typename Y, typename Z, typename V, typename W
-    >
-    friend class detail::pull_coroutine_object;
+  template<typename T>
+  struct is_coroutine : boost::mpl::false_{};
+  
+  template<typename Sig, typename Con>
+  struct is_coroutine<coroutine<Sig, Con> > : boost::mpl::true_{};
 
-    typedef detail::push_coroutine_base< Arg >  base_t;
-    typedef typename base_t::ptr_t              ptr_t;
+  template<typename Signature, 
+	   typename ContextImpl = detail::default_context_impl>
+  class coroutine : public movable<coroutine<Signature, ContextImpl> > {
+  public:
+    typedef coroutine<Signature, ContextImpl> type;
+    typedef ContextImpl context_impl;
+    typedef Signature signature_type;
+    friend struct detail::coroutine_accessor;
 
-    struct dummy
-    { void nonnull() {} };
+    typedef BOOST_DEDUCED_TYPENAME 
+    detail::coroutine_traits<signature_type>
+    ::result_type result_type;
 
-    ptr_t  impl_;
+    typedef BOOST_DEDUCED_TYPENAME 
+    detail::coroutine_traits<signature_type>
+    ::result_slot_type result_slot_type;
 
-    BOOST_MOVABLE_BUT_NOT_COPYABLE( push_coroutine)
+    typedef BOOST_DEDUCED_TYPENAME 
+    detail::coroutine_traits<signature_type>
+    ::yield_result_type yield_result_type;
 
-    template< typename Allocator >
-    push_coroutine( detail::coroutine_context const& callee,
-                    bool unwind, bool preserve_fpu,
-                    Allocator const& alloc) :
-        impl_()
-    {
-        typedef detail::push_coroutine_caller<
-                Arg, Allocator
-        >                               caller_t;
-        typename caller_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) caller_t(
-                callee, unwind, preserve_fpu, a) );
+    typedef BOOST_DEDUCED_TYPENAME 
+    detail::coroutine_traits<signature_type>
+    ::result_slot_traits result_slot_traits;
+
+    typedef BOOST_DEDUCED_TYPENAME 
+    detail::coroutine_traits<signature_type>
+    ::arg_slot_type arg_slot_type;
+
+    typedef BOOST_DEDUCED_TYPENAME 
+    detail::coroutine_traits<signature_type>
+    ::arg_slot_traits arg_slot_traits;
+        
+    typedef detail::coroutine_impl<type, context_impl> impl_type;
+    typedef BOOST_DEDUCED_TYPENAME  impl_type::pointer impl_ptr;  
+   
+    typedef detail::coroutine_self<type> self;
+    coroutine() : m_pimpl(0) {}
+
+    template<typename Functor>
+    coroutine (Functor f, 
+	       std::ptrdiff_t stack_size = detail::default_stack_size,
+	       BOOST_DEDUCED_TYPENAME boost::enable_if<
+	       boost::mpl::and_<
+	       detail::is_callable<Functor>, 
+	       boost::mpl::not_<is_coroutine<Functor> >
+	       > >
+	       ::type * = 0
+	       ) :
+      m_pimpl(impl_type::create(f, stack_size)) {}
+ 
+    coroutine(move_from<coroutine> src) 
+      : m_pimpl(src->m_pimpl) {
+      src->m_pimpl = 0;
     }
 
-public:
-    push_coroutine() BOOST_NOEXCEPT :
-        impl_()
-    {}
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-# ifdef BOOST_MSVC
-	typedef void ( * coroutine_fn)( pull_coroutine< Arg > &);
-
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
-
-    template< typename StackAllocator >
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
-
-    template< typename StackAllocator, typename Allocator >
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc);
-# endif
-    template< typename Fn >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
-
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc);
-#else
-    template< typename Fn >
-    explicit push_coroutine( Fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
-
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
-
-    template< typename Fn >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
-
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
-#endif
-
-    push_coroutine( BOOST_RV_REF( push_coroutine) other) BOOST_NOEXCEPT :
-        impl_()
-    { swap( other); }
-
-    push_coroutine & operator=( BOOST_RV_REF( push_coroutine) other) BOOST_NOEXCEPT
-    {
-        push_coroutine tmp( boost::move( other) );
-        swap( tmp);
-        return * this;
+    coroutine& operator=(move_from<coroutine> src) {
+      coroutine(src).swap(*this);
+      return *this;
     }
 
-    bool empty() const BOOST_NOEXCEPT
-    { return ! impl_; }
-
-    BOOST_EXPLICIT_OPERATOR_BOOL();
-
-    bool operator!() const BOOST_NOEXCEPT
-    { return empty() || impl_->is_complete(); }
-
-    void swap( push_coroutine & other) BOOST_NOEXCEPT
-    { impl_.swap( other.impl_); }
-
-    push_coroutine & operator()( Arg const& arg)
-    {
-        BOOST_ASSERT( * this);
-
-        impl_->push( arg);
-        return * this;
+    coroutine& swap(coroutine& rhs) {
+      std::swap(m_pimpl, rhs.m_pimpl);
+      return *this;
     }
 
-    push_coroutine & operator()( BOOST_RV_REF( Arg) arg)
-    {
-        BOOST_ASSERT( * this);
-
-        impl_->push( forward< Arg >( arg) );
-        return * this;
+    friend
+    void swap(coroutine& lhs, coroutine& rhs) {
+      lhs.swap(rhs);
     }
 
-    class iterator : public std::iterator< std::output_iterator_tag, void, void, void, void >
-    {
-    private:
-       push_coroutine< Arg >    *   c_;
+#   define BOOST_COROUTINE_generate_argument_n_type(z, n, traits_type) \
+    typedef BOOST_DEDUCED_TYPENAME traits_type ::template at<n>::type  \
+    BOOST_PP_CAT(BOOST_PP_CAT(arg, n), _type);                         \
+    /**/
 
-    public:
-        iterator() :
-           c_( 0)
-        {}
+    BOOST_PP_REPEAT(BOOST_COROUTINE_ARG_MAX,
+		    BOOST_COROUTINE_generate_argument_n_type,
+		    arg_slot_traits);
 
-        explicit iterator( push_coroutine< Arg > * c) :
-            c_( c)
-        {}
+    static const int arity = arg_slot_traits::length;
 
-        iterator & operator=( Arg a)
-        {
-            BOOST_ASSERT( c_);
-            if ( ! ( * c_)( a) ) c_ = 0;
-            return * this;
-        }
-
-        bool operator==( iterator const& other)
-        { return other.c_ == c_; }
-
-        bool operator!=( iterator const& other)
-        { return other.c_ != c_; }
-
-        iterator & operator*()
-        { return * this; }
-
-        iterator & operator++()
-        { return * this; }
+    struct yield_traits {
+      BOOST_PP_REPEAT(BOOST_COROUTINE_ARG_MAX,
+		      BOOST_COROUTINE_generate_argument_n_type,
+		      result_slot_traits);
+      static const int arity = result_slot_traits::length;
     };
 
-    struct const_iterator;
-};
+#   undef BOOST_COROUTINE_generate_argument_n_type
+   
+#   define BOOST_COROUTINE_param_with_default(z, n, type_prefix)    \
+    BOOST_DEDUCED_TYPENAME call_traits                              \
+    <BOOST_PP_CAT(BOOST_PP_CAT(type_prefix, n), _type)>::param_type \
+    BOOST_PP_CAT(arg, n) =                                          \
+    BOOST_PP_CAT(BOOST_PP_CAT(type_prefix, n), _type)()             \
+    /**/
 
-template< typename Arg >
-class push_coroutine< Arg & >
-{
-private:
-    template<
-        typename X, typename Y, typename Z, typename V, typename W
-    >
-    friend class detail::pull_coroutine_object;
-
-    typedef detail::push_coroutine_base< Arg & >    base_t;
-    typedef typename base_t::ptr_t                  ptr_t;
-
-    struct dummy
-    { void nonnull() {} };
-
-    ptr_t  impl_;
-
-    BOOST_MOVABLE_BUT_NOT_COPYABLE( push_coroutine)
-
-    template< typename Allocator >
-    push_coroutine( detail::coroutine_context const& callee,
-                    bool unwind, bool preserve_fpu,
-                    Allocator const& alloc) :
-        impl_()
-    {
-        typedef detail::push_coroutine_caller<
-                Arg &, Allocator
-        >                               caller_t;
-        typename caller_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) caller_t(
-                callee, unwind, preserve_fpu, a) );
+    result_type operator()
+      (BOOST_PP_ENUM
+       (BOOST_COROUTINE_ARG_MAX,
+	BOOST_COROUTINE_param_with_default,
+	arg)) {
+      return call_impl
+	(arg_slot_type(BOOST_PP_ENUM_PARAMS
+	  (BOOST_COROUTINE_ARG_MAX, 
+	   arg)));
     }
 
-public:
-    push_coroutine() BOOST_NOEXCEPT :
-        impl_()
-    {}
+    BOOST_DEDUCED_TYPENAME
+    detail::optional_result_type<result_type>::type 
+    operator()
+      (const std::nothrow_t&
+       BOOST_PP_ENUM_TRAILING
+       (BOOST_COROUTINE_ARG_MAX,
+	BOOST_COROUTINE_param_with_default,
+	arg)) {
+      return call_impl_nothrow
+	(arg_slot_type(BOOST_PP_ENUM_PARAMS
+	  (BOOST_COROUTINE_ARG_MAX, 
+	   arg)));
+    }
 
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-# ifdef BOOST_MSVC
-	typedef void ( * coroutine_fn)( pull_coroutine< Arg & > &);
+#   undef BOOST_COROUTINE_param_typedef
+#   undef BOOST_COROUTINE_param_with_default
 
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
+    typedef void(coroutine::*bool_type)();
+    operator bool_type() const {
+      return good()? &coroutine::bool_type_f: 0;
+    }
 
-    template< typename StackAllocator >
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
+    bool operator==(const coroutine& rhs) {
+      return m_pimpl == rhs.m_pimpl;
+    }
 
-    template< typename StackAllocator, typename Allocator >
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc);
-# endif
-    template< typename Fn >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
+    void exit() {
+      BOOST_ASSERT(m_pimpl);
+      m_pimpl->exit();
+    }
 
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
+    bool waiting() const {
+      BOOST_ASSERT(m_pimpl);
+      return m_pimpl->waiting();
+    }
 
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc);
-#else
-    template< typename Fn >
-    explicit push_coroutine( Fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
+    bool pending() const {
+      BOOST_ASSERT(m_pimpl);
+      return m_pimpl->pending();
+    }
 
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
+    bool exited() const {
+      BOOST_ASSERT(m_pimpl);
+      return m_pimpl->exited();
+    }
 
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
+    bool empty() const {
+      return m_pimpl == 0;
+    }
+  protected:
 
-    template< typename Fn >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
+    // The second parameter is used to avoid calling this constructor
+    // by mistake from other member funcitons (specifically operator=).
+    coroutine(impl_type * pimpl, detail::init_from_impl_tag) :
+      m_pimpl(pimpl) {}
 
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
+    void bool_type_f() {}
 
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
+    bool good() const  {
+      return !empty() && !exited() && !waiting();
+    }
+
+    result_type call_impl(arg_slot_type args) {
+      BOOST_ASSERT(m_pimpl);
+      m_pimpl->bind_args(&args);
+      BOOST_DEDUCED_TYPENAME impl_type::local_result_slot_ptr ptr(m_pimpl);
+      m_pimpl->invoke();
+
+      return detail::fix_result<result_slot_traits>(*m_pimpl->result());
+    }
+
+    BOOST_DEDUCED_TYPENAME
+    detail::optional_result_type<result_type>::type 
+    call_impl_nothrow(arg_slot_type args) {
+      BOOST_ASSERT(m_pimpl);
+      m_pimpl->bind_args(&args);
+      BOOST_DEDUCED_TYPENAME impl_type::local_result_slot_ptr ptr(m_pimpl);
+      if(!m_pimpl->wake_up())
+	return detail::optional_result<result_type>();
+
+      return detail::fix_result<result_slot_traits>(*m_pimpl->result());
+    }
+
+    impl_ptr m_pimpl;
+
+    void acquire() {
+      m_pimpl->acquire();
+    }
+
+    void release() {
+      m_pimpl->release();
+    }
+
+    std::size_t
+    count() const {
+      return m_pimpl->count();
+    }
+
+    impl_ptr get_impl() {
+      return m_pimpl;
+    }
+  };
+} }
 #endif
-
-    push_coroutine( BOOST_RV_REF( push_coroutine) other) BOOST_NOEXCEPT :
-        impl_()
-    { swap( other); }
-
-    push_coroutine & operator=( BOOST_RV_REF( push_coroutine) other) BOOST_NOEXCEPT
-    {
-        push_coroutine tmp( boost::move( other) );
-        swap( tmp);
-        return * this;
-    }
-
-    bool empty() const BOOST_NOEXCEPT
-    { return ! impl_; }
-
-    BOOST_EXPLICIT_OPERATOR_BOOL();
-
-    bool operator!() const BOOST_NOEXCEPT
-    { return empty() || impl_->is_complete(); }
-
-    void swap( push_coroutine & other) BOOST_NOEXCEPT
-    { impl_.swap( other.impl_); }
-
-    push_coroutine & operator()( Arg & arg)
-    {
-        BOOST_ASSERT( * this);
-
-        impl_->push( arg);
-        return * this;
-    }
-
-    class iterator : public std::iterator< std::output_iterator_tag, void, void, void, void >
-    {
-    private:
-       push_coroutine< Arg & >    *   c_;
-
-    public:
-        iterator() :
-           c_( 0)
-        {}
-
-        explicit iterator( push_coroutine< Arg & > * c) :
-            c_( c)
-        {}
-
-        iterator & operator=( Arg & a)
-        {
-            BOOST_ASSERT( c_);
-            if ( ! ( * c_)( a) ) c_ = 0;
-            return * this;
-        }
-
-        bool operator==( iterator const& other)
-        { return other.c_ == c_; }
-
-        bool operator!=( iterator const& other)
-        { return other.c_ != c_; }
-
-        iterator & operator*()
-        { return * this; }
-
-        iterator & operator++()
-        { return * this; }
-    };
-
-    struct const_iterator;
-};
-
-template<>
-class push_coroutine< void >
-{
-private:
-    template<
-        typename X, typename Y, typename Z, typename V, typename W
-    >
-    friend class detail::pull_coroutine_object;
-
-    typedef detail::push_coroutine_base< void >  base_t;
-    typedef base_t::ptr_t                        ptr_t;
-
-    struct dummy
-    { void nonnull() {} };
-
-    ptr_t  impl_;
-
-    BOOST_MOVABLE_BUT_NOT_COPYABLE( push_coroutine)
-
-    template< typename Allocator >
-    push_coroutine( detail::coroutine_context const& callee,
-                    bool unwind, bool preserve_fpu,
-                    Allocator const& alloc) :
-        impl_()
-    {
-        typedef detail::push_coroutine_caller<
-                void, Allocator
-        >                               caller_t;
-        typename caller_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) caller_t(
-                callee, unwind, preserve_fpu, a) );
-    }
-
-public:
-    push_coroutine() BOOST_NOEXCEPT :
-        impl_()
-    {}
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-# ifdef BOOST_MSVC
-	typedef void ( * coroutine_fn)( pull_coroutine< void > &);
-
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
-
-    template< typename StackAllocator >
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
-
-    template< typename StackAllocator, typename Allocator >
-    explicit push_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc);
-# endif
-    template< typename Fn >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
-
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >() );
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc);
-#else
-    template< typename Fn >
-    explicit push_coroutine( Fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
-
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0);
-
-    template< typename Fn >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
-
-    template< typename Fn, typename StackAllocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< push_coroutine > const& alloc = std::allocator< push_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if<
-                is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-            >::type = 0);
-#endif
-
-    push_coroutine( BOOST_RV_REF( push_coroutine) other) BOOST_NOEXCEPT :
-        impl_()
-    { swap( other); }
-
-    push_coroutine & operator=( BOOST_RV_REF( push_coroutine) other) BOOST_NOEXCEPT
-    {
-        push_coroutine tmp( boost::move( other) );
-        swap( tmp);
-        return * this;
-    }
-
-    bool empty() const BOOST_NOEXCEPT
-    { return ! impl_; }
-
-    BOOST_EXPLICIT_OPERATOR_BOOL();
-
-    bool operator!() const BOOST_NOEXCEPT
-    { return empty() || impl_->is_complete(); }
-
-    void swap( push_coroutine & other) BOOST_NOEXCEPT
-    { impl_.swap( other.impl_); }
-
-    push_coroutine & operator()()
-    {
-        BOOST_ASSERT( * this);
-
-        impl_->push();
-        return * this;
-    }
-
-    struct iterator;
-    struct const_iterator;
-};
-
-
-
-template< typename R >
-class pull_coroutine
-{
-private:
-    template<
-        typename X, typename Y, typename Z, typename V, typename W
-    >
-    friend class detail::push_coroutine_object;
-
-    typedef detail::pull_coroutine_base< R >    base_t;
-    typedef typename base_t::ptr_t              ptr_t;
-
-    struct dummy
-    { void nonnull() {} };
-
-    ptr_t  impl_;
-
-    BOOST_MOVABLE_BUT_NOT_COPYABLE( pull_coroutine)
-
-    template< typename Allocator >
-    pull_coroutine( detail::coroutine_context const& callee,
-                    bool unwind, bool preserve_fpu,
-                    Allocator const& alloc,
-                    R * result) :
-        impl_()
-    {
-        typedef detail::pull_coroutine_caller<
-                R, Allocator
-        >                               caller_t;
-        typename caller_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) caller_t(
-                callee, unwind, preserve_fpu, a, result) );
-    }
-
-public:
-    pull_coroutine() BOOST_NOEXCEPT :
-        impl_()
-    {}
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-# ifdef BOOST_MSVC
-	typedef void ( * coroutine_fn)( push_coroutine< R > &);
-
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, coroutine_fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< R >
-            >                               object_t;
-        object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename StackAllocator >
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, coroutine_fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, coroutine_fn, StackAllocator, Allocator,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-# endif
-    template< typename Fn >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, StackAllocator, Allocator,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-#else
-    template< typename Fn >
-    explicit pull_coroutine( Fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, StackAllocator, Allocator,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R, Fn, StackAllocator, Allocator,
-                push_coroutine< R >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-#endif
-
-    pull_coroutine( BOOST_RV_REF( pull_coroutine) other) BOOST_NOEXCEPT :
-        impl_()
-    { swap( other); }
-
-    pull_coroutine & operator=( BOOST_RV_REF( pull_coroutine) other) BOOST_NOEXCEPT
-    {
-        pull_coroutine tmp( boost::move( other) );
-        swap( tmp);
-        return * this;
-    }
-
-    bool empty() const BOOST_NOEXCEPT
-    { return ! impl_; }
-
-    BOOST_EXPLICIT_OPERATOR_BOOL();
-
-    bool operator!() const BOOST_NOEXCEPT
-    { return empty() || impl_->is_complete(); }
-
-    void swap( pull_coroutine & other) BOOST_NOEXCEPT
-    { impl_.swap( other.impl_); }
-
-    pull_coroutine & operator()()
-    {
-        BOOST_ASSERT( * this);
-
-        impl_->pull();
-        return * this;
-    }
-
-    bool has_result() const
-    {
-        BOOST_ASSERT( ! empty() );
-
-        return impl_->has_result();
-    }
-
-    R get() const
-    {
-        BOOST_ASSERT( ! empty() );
-
-        return impl_->get();
-    }
-
-    class iterator : public std::iterator< std::input_iterator_tag, typename remove_reference< R >::type >
-    {
-    private:
-        pull_coroutine< R > *   c_;
-        R                   *   val_;
-
-        void fetch_()
-        {
-            BOOST_ASSERT( c_);
-
-            if ( ! c_->has_result() )
-            {
-                c_ = 0;
-                val_ = 0;
-                return;
-            }
-            val_ = c_->impl_->get_pointer();
-        }
-
-        void increment_()
-        {
-            BOOST_ASSERT( c_);
-            BOOST_ASSERT( * c_);
-
-            ( * c_)();
-            fetch_();
-        }
-
-    public:
-        typedef typename iterator::pointer      pointer_t;
-        typedef typename iterator::reference    reference_t;
-
-        iterator() :
-            c_( 0), val_( 0)
-        {}
-
-        explicit iterator( pull_coroutine< R > * c) :
-            c_( c), val_( 0)
-        { fetch_(); }
-
-        iterator( iterator const& other) :
-            c_( other.c_), val_( other.val_)
-        {}
-
-        iterator & operator=( iterator const& other)
-        {
-            if ( this == & other) return * this;
-            c_ = other.c_;
-            val_ = other.val_;
-            return * this;
-        }
-
-        bool operator==( iterator const& other)
-        { return other.c_ == c_ && other.val_ == val_; }
-
-        bool operator!=( iterator const& other)
-        { return other.c_ != c_ || other.val_ != val_; }
-
-        iterator & operator++()
-        {
-            increment_();
-            return * this;
-        }
-
-        iterator operator++( int)
-        {
-            iterator tmp( * this);
-            ++*this;
-            return tmp;
-        }
-
-        reference_t operator*() const
-        {
-            if ( ! val_)
-                boost::throw_exception(
-                    invalid_result() );
-            return * val_;
-        }
-
-        pointer_t operator->() const
-        {
-            if ( ! val_)
-                boost::throw_exception(
-                    invalid_result() );
-            return val_;
-        }
-    };
-
-    friend class iterator;
-
-    struct const_iterator;
-};
-
-template< typename R >
-class pull_coroutine< R & >
-{
-private:
-    template<
-        typename X, typename Y, typename Z, typename V, typename W
-    >
-    friend class detail::push_coroutine_object;
-
-    typedef detail::pull_coroutine_base< R & >  base_t;
-    typedef typename base_t::ptr_t              ptr_t;
-
-    struct dummy
-    { void nonnull() {} };
-
-    ptr_t  impl_;
-
-    BOOST_MOVABLE_BUT_NOT_COPYABLE( pull_coroutine)
-
-    template< typename Allocator >
-    pull_coroutine( detail::coroutine_context const& callee,
-                    bool unwind, bool preserve_fpu,
-                    Allocator const& alloc,
-                    R * result) :
-        impl_()
-    {
-        typedef detail::pull_coroutine_caller<
-                R &, Allocator
-        >                               caller_t;
-        typename caller_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) caller_t(
-                callee, unwind, preserve_fpu, a, result) );
-    }
-
-public:
-    pull_coroutine() BOOST_NOEXCEPT :
-        impl_()
-    {}
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-# ifdef BOOST_MSVC
-	typedef void ( * coroutine_fn)( push_coroutine< R & > &);
-
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, coroutine_fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< R & >
-            >                               object_t;
-        object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename StackAllocator >
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, coroutine_fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, coroutine_fn, StackAllocator, Allocator,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-# endif
-    template< typename Fn >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, StackAllocator, Allocator,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-#else
-    template< typename Fn >
-    explicit pull_coroutine( Fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, StackAllocator, Allocator,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                R &, Fn, StackAllocator, Allocator,
-                push_coroutine< R & >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-#endif
-
-    pull_coroutine( BOOST_RV_REF( pull_coroutine) other) BOOST_NOEXCEPT :
-        impl_()
-    { swap( other); }
-
-    pull_coroutine & operator=( BOOST_RV_REF( pull_coroutine) other) BOOST_NOEXCEPT
-    {
-        pull_coroutine tmp( boost::move( other) );
-        swap( tmp);
-        return * this;
-    }
-
-    bool empty() const BOOST_NOEXCEPT
-    { return ! impl_; }
-
-    BOOST_EXPLICIT_OPERATOR_BOOL();
-
-    bool operator!() const BOOST_NOEXCEPT
-    { return empty() || impl_->is_complete(); }
-
-    void swap( pull_coroutine & other) BOOST_NOEXCEPT
-    { impl_.swap( other.impl_); }
-
-    pull_coroutine & operator()()
-    {
-        BOOST_ASSERT( * this);
-
-        impl_->pull();
-        return * this;
-    }
-
-    bool has_result() const
-    {
-        BOOST_ASSERT( ! empty() );
-
-        return impl_->has_result();
-    }
-
-    R & get() const
-    { return impl_->get(); }
-
-    class iterator : public std::iterator< std::input_iterator_tag, R >
-    {
-    private:
-        pull_coroutine< R & >   *   c_;
-        R                       *   val_;
-
-        void fetch_()
-        {
-            BOOST_ASSERT( c_);
-
-            if ( ! c_->has_result() )
-            {
-                c_ = 0;
-                val_ = 0;
-                return;
-            }
-            val_ = c_->impl_->get_pointer();
-        }
-
-        void increment_()
-        {
-            BOOST_ASSERT( c_);
-            BOOST_ASSERT( * c_);
-
-            ( * c_)();
-            fetch_();
-        }
-
-    public:
-        typedef typename iterator::pointer      pointer_t;
-        typedef typename iterator::reference    reference_t;
-
-        iterator() :
-            c_( 0), val_( 0)
-        {}
-
-        explicit iterator( pull_coroutine< R & > * c) :
-            c_( c), val_( 0)
-        { fetch_(); }
-
-        iterator( iterator const& other) :
-            c_( other.c_), val_( other.val_)
-        {}
-
-        iterator & operator=( iterator const& other)
-        {
-            if ( this == & other) return * this;
-            c_ = other.c_;
-            val_ = other.val_;
-            return * this;
-        }
-
-        bool operator==( iterator const& other)
-        { return other.c_ == c_ && other.val_ == val_; }
-
-        bool operator!=( iterator const& other)
-        { return other.c_ != c_ || other.val_ != val_; }
-
-        iterator & operator++()
-        {
-            increment_();
-            return * this;
-        }
-
-        iterator operator++( int)
-        {
-            iterator tmp( * this);
-            ++*this;
-            return tmp;
-        }
-
-        reference_t operator*() const
-        {
-            if ( ! val_)
-                boost::throw_exception(
-                    invalid_result() );
-            return * val_;
-        }
-
-        pointer_t operator->() const
-        {
-            if ( ! val_)
-                boost::throw_exception(
-                    invalid_result() );
-            return val_;
-        }
-    };
-
-    friend class iterator;
-
-    struct const_iterator;
-};
-
-template<>
-class pull_coroutine< void >
-{
-private:
-    template<
-        typename X, typename Y, typename Z, typename V, typename W
-    >
-    friend class detail::push_coroutine_object;
-
-    typedef detail::pull_coroutine_base< void > base_t;
-    typedef base_t::ptr_t                       ptr_t;
-
-    struct dummy
-    { void nonnull() {} };
-
-    ptr_t  impl_;
-
-    BOOST_MOVABLE_BUT_NOT_COPYABLE( pull_coroutine)
-
-    template< typename Allocator >
-    pull_coroutine( detail::coroutine_context const& callee,
-                    bool unwind, bool preserve_fpu,
-                    Allocator const& alloc) :
-        impl_()
-    {
-        typedef detail::pull_coroutine_caller<
-                void, Allocator
-        >                               caller_t;
-        typename caller_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) caller_t(
-                callee, unwind, preserve_fpu, a) );
-    }
-
-public:
-    pull_coroutine() BOOST_NOEXCEPT :
-        impl_()
-    {}
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-# ifdef BOOST_MSVC
-	typedef void ( * coroutine_fn)( push_coroutine< void > &);
-
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, coroutine_fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< void >
-            >                               object_t;
-        object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename StackAllocator >
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, coroutine_fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( coroutine_fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, coroutine_fn, StackAllocator, Allocator,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-    }
-# endif
-    template< typename Fn >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >() ) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, StackAllocator, Allocator,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-#else
-    template< typename Fn >
-    explicit pull_coroutine( Fn fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( Fn fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, StackAllocator, Allocator,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-    }
-
-    template< typename Fn >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr = attributes(),
-            stack_allocator const& stack_alloc = stack_allocator(),
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, stack_allocator, std::allocator< pull_coroutine >,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            std::allocator< pull_coroutine > const& alloc = std::allocator< pull_coroutine >(),
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, StackAllocator, std::allocator< pull_coroutine >,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-
-    template< typename Fn, typename StackAllocator, typename Allocator >
-    explicit pull_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-            StackAllocator const& stack_alloc,
-            Allocator const& alloc,
-            typename disable_if<
-                is_same< typename decay< Fn >::type, pull_coroutine >, dummy*
-            >::type = 0) :
-    impl_()
-    {
-        typedef detail::pull_coroutine_object<
-                void, Fn, StackAllocator, Allocator,
-                push_coroutine< void >
-            >                               object_t;
-        typename object_t::allocator_t a( alloc);
-        impl_ = ptr_t(
-            // placement new
-            ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-    }
-#endif
-
-    pull_coroutine( BOOST_RV_REF( pull_coroutine) other) BOOST_NOEXCEPT :
-        impl_()
-    { swap( other); }
-
-    pull_coroutine & operator=( BOOST_RV_REF( pull_coroutine) other) BOOST_NOEXCEPT
-    {
-        pull_coroutine tmp( boost::move( other) );
-        swap( tmp);
-        return * this;
-    }
-
-    bool empty() const BOOST_NOEXCEPT
-    { return ! impl_; }
-
-    BOOST_EXPLICIT_OPERATOR_BOOL();
-
-    bool operator!() const BOOST_NOEXCEPT
-    { return empty() || impl_->is_complete(); }
-
-    void swap( pull_coroutine & other) BOOST_NOEXCEPT
-    { impl_.swap( other.impl_); }
-
-    pull_coroutine & operator()()
-    {
-        BOOST_ASSERT( * this);
-
-        impl_->pull();
-        return * this;
-    }
-
-    struct iterator;
-    struct const_iterator;
-};
-
-#ifndef BOOST_NO_CXX11_RVALUE_REFERENCES
-# ifdef BOOST_MSVC
-template< typename Arg >
-push_coroutine< Arg >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, coroutine_fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename StackAllocator >
-push_coroutine< Arg >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, coroutine_fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename StackAllocator, typename Allocator >
-push_coroutine< Arg >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, coroutine_fn, StackAllocator, Allocator,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-push_coroutine< Arg & >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, coroutine_fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename StackAllocator >
-push_coroutine< Arg & >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, coroutine_fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename StackAllocator, typename Allocator >
-push_coroutine< Arg & >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, coroutine_fn, StackAllocator, Allocator,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-
-push_coroutine< void >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine< void > > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, coroutine_fn, stack_allocator, std::allocator< push_coroutine< void > >,
-            pull_coroutine< void >
-        >                               object_t;
-    object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename StackAllocator >
-push_coroutine< void >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, coroutine_fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename StackAllocator, typename Allocator >
-push_coroutine< void >::push_coroutine( coroutine_fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, coroutine_fn, StackAllocator, Allocator,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< coroutine_fn >( fn), attr, stack_alloc, a) );
-}
-# endif
-template< typename Arg >
-template< typename Fn >
-push_coroutine< Arg >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator >
-push_coroutine< Arg >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< Arg >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, StackAllocator, Allocator,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn >
-push_coroutine< Arg & >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator >
-push_coroutine< Arg & >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< Arg & >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, StackAllocator, Allocator,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Fn >
-push_coroutine< void >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine< void > > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, stack_allocator, std::allocator< push_coroutine< void > >,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >(fn), attr, stack_alloc, a) );
-}
-
-template< typename Fn, typename StackAllocator >
-push_coroutine< void >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-}
-
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< void >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, StackAllocator, Allocator,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( forward< Fn >( fn), attr, stack_alloc, a) );
-}
-#else
-template< typename Arg >
-template< typename Fn >
-push_coroutine< Arg >::push_coroutine( Fn fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator >
-push_coroutine< Arg >::push_coroutine( Fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< Arg >::push_coroutine( Fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, StackAllocator, Allocator,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn >
-push_coroutine< Arg & >::push_coroutine( Fn fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator >
-push_coroutine< Arg & >::push_coroutine( Fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< Arg & >::push_coroutine( Fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, StackAllocator, Allocator,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Fn >
-push_coroutine< void >::push_coroutine( Fn fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Fn, typename StackAllocator >
-push_coroutine< void >::push_coroutine( Fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< void >::push_coroutine( Fn fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc,
-        typename disable_if< is_convertible< Fn &, BOOST_RV_REF(Fn) >, dummy* >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, StackAllocator, Allocator,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn >
-push_coroutine< Arg >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator >
-push_coroutine< Arg >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< Arg >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg, Fn, StackAllocator, Allocator,
-            pull_coroutine< Arg >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn >
-push_coroutine< Arg & >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, stack_allocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator >
-push_coroutine< Arg & >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Arg >
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< Arg & >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            Arg &, Fn, StackAllocator, Allocator,
-            pull_coroutine< Arg & >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Fn >
-push_coroutine< void >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        stack_allocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, stack_allocator, std::allocator< push_coroutine< void > >,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Fn, typename StackAllocator >
-push_coroutine< void >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        std::allocator< push_coroutine > const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, StackAllocator, std::allocator< push_coroutine >,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-
-template< typename Fn, typename StackAllocator, typename Allocator >
-push_coroutine< void >::push_coroutine( BOOST_RV_REF( Fn) fn, attributes const& attr,
-        StackAllocator const& stack_alloc,
-        Allocator const& alloc,
-        typename disable_if<
-            is_same< typename decay< Fn >::type, push_coroutine >, dummy*
-        >::type) :
-impl_()
-{
-    typedef detail::push_coroutine_object<
-            void, Fn, StackAllocator, Allocator,
-            pull_coroutine< void >
-        >                               object_t;
-    typename object_t::allocator_t a( alloc);
-    impl_ = ptr_t(
-        // placement new
-        ::new( a.allocate( 1) ) object_t( fn, attr, stack_alloc, a) );
-}
-#endif
-
-template< typename R >
-void swap( pull_coroutine< R > & l, pull_coroutine< R > & r) BOOST_NOEXCEPT
-{ l.swap( r); }
-
-template< typename Arg >
-void swap( push_coroutine< Arg > & l, push_coroutine< Arg > & r) BOOST_NOEXCEPT
-{ l.swap( r); }
-
-template< typename R >
-inline
-typename pull_coroutine< R >::iterator
-range_begin( pull_coroutine< R > & c)
-{ return typename pull_coroutine< R >::iterator( & c); }
-
-template< typename R >
-inline
-typename pull_coroutine< R >::iterator
-range_end( pull_coroutine< R > &)
-{ return typename pull_coroutine< R >::iterator(); }
-
-template< typename Arg >
-inline
-typename push_coroutine< Arg >::iterator
-range_begin( push_coroutine< Arg > & c)
-{ return typename push_coroutine< Arg >::iterator( & c); }
-
-template< typename Arg >
-inline
-typename push_coroutine< Arg >::iterator
-range_end( push_coroutine< Arg > &)
-{ return typename push_coroutine< Arg >::iterator(); }
-
-template< typename T >
-struct coroutine
-{
-    typedef push_coroutine< T > push_type;
-    typedef pull_coroutine< T > pull_type;
-};
-
-}
-
-template< typename Arg >
-struct range_mutable_iterator< coroutines::push_coroutine< Arg > >
-{ typedef typename coroutines::push_coroutine< Arg >::iterator type; };
-
-template< typename R >
-struct range_mutable_iterator< coroutines::pull_coroutine< R > >
-{ typedef typename coroutines::pull_coroutine< R >::iterator type; };
-
-}
-
-namespace std {
-
-template< typename R >
-inline
-typename boost::coroutines::pull_coroutine< R >::iterator
-begin( boost::coroutines::pull_coroutine< R > & c)
-{ return boost::begin( c); }
-
-template< typename R >
-inline
-typename boost::coroutines::pull_coroutine< R >::iterator
-end( boost::coroutines::pull_coroutine< R > & c)
-{ return boost::end( c); }
-
-template< typename R >
-inline
-typename boost::coroutines::push_coroutine< R >::iterator
-begin( boost::coroutines::push_coroutine< R > & c)
-{ return boost::begin( c); }
-
-template< typename R >
-inline
-typename boost::coroutines::push_coroutine< R >::iterator
-end( boost::coroutines::push_coroutine< R > & c)
-{ return boost::end( c); }
-
-}
-
-#ifdef BOOST_HAS_ABI_HEADERS
-#  include BOOST_ABI_SUFFIX
-#endif
-
-#endif // BOOST_COROUTINES_COROUTINE_H

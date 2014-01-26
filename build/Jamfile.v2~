@@ -43,7 +43,7 @@ if [ os.name ] = LINUX
 {
         TARGET_SPECIFIC_SOURCES =
           swapcontext64.s
-#         swapcontext.s
+#		coroutine.cpp
           ;
 }
 
