@@ -497,17 +497,17 @@ void test_output_iterator()
 
     int counter = 0;
     std::vector< int > vec;
-//  coro::coroutine< int >::push_type coro(
-//      [&vec]( coro::coroutine< int >::pull_type & c) {
-//          int x = c.get();
-//          while ( 5 > x)
-//          {
-//              vec.push_back( x);
-//              x = c().get();
-//          }
-//      });
     coro::coroutine< int >::push_type coro(
-        std::bind( f17, std::placeholders::_1, std::ref( vec) ) );
+        [&vec]( coro::coroutine< int >::pull_type & c) {
+            int x = c.get();
+            while ( 5 > x)
+            {
+                vec.push_back( x);
+                x = c().get();
+            }
+        });
+//  coro::coroutine< int >::push_type coro(
+//      std::bind( f17, std::placeholders::_1, std::ref( vec) ) );
     coro::coroutine< int >::push_type::iterator e( end( coro) );
     for ( coro::coroutine< int >::push_type::iterator i( begin( coro) );
           i != e; ++i)
