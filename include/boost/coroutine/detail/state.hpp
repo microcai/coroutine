@@ -4,15 +4,15 @@
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
 
-#ifndef BOOST_COROUTINES_COROUTINE_H
-#define BOOST_COROUTINES_COROUTINE_H
+#ifndef BOOST_COROUTINES_DETAIL_ASYMMETRIC_COROUTINE_HPP
+#define BOOST_COROUTINES_DETAIL_ASYMMETRIC_COROUTINE_HPP
 
 #include <exception>
 
 #include <boost/assert.hpp>
 #include <boost/config.hpp>
 
-#include <boost/coroutine/detail/coroutine.hpp>
+#include <boost/coroutine/detail/config.hpp>
 
 #ifdef BOOST_HAS_ABI_HEADERS
 #  include BOOST_ABI_PREFIX
@@ -20,17 +20,18 @@
 
 namespace boost {
 namespace coroutines {
+namespace detail {
 
-template< typename T >
-struct coroutine {
-    typedef detail::pull_coroutine< T >     pull_type;
-    typedef detail::push_coroutine< T >     push_type;
+enum class state_t : unsigned int {
+    complete   = 1 << 1,
+    unwind     = 1 << 2,
+    early_exit = 1 << 3
 };
 
-}}
+}}}
 
 #ifdef BOOST_HAS_ABI_HEADERS
 #  include BOOST_ABI_SUFFIX
 #endif
 
-#endif // BOOST_COROUTINES_COROUTINE_H
+#endif // BOOST_COROUTINES_DETAIL_ASYMMETRIC_COROUTINE_HPP

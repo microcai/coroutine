@@ -4,13 +4,14 @@
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          http://www.boost.org/LICENSE_1_0.txt)
 
-#ifndef BOOST_COROUTINES_COROUTINE_H
-#define BOOST_COROUTINES_COROUTINE_H
+#ifndef BOOST_COROUTINES_SEGMENTED_H
+#define BOOST_COROUTINES_SEGMENTED_H
 
 #include <exception>
 
 #include <boost/assert.hpp>
 #include <boost/config.hpp>
+#include <boost/context/segmented.hpp>
 
 #include <boost/coroutine/detail/coroutine.hpp>
 
@@ -21,11 +22,11 @@
 namespace boost {
 namespace coroutines {
 
-template< typename T >
-struct coroutine {
-    typedef detail::pull_coroutine< T >     pull_type;
-    typedef detail::push_coroutine< T >     push_type;
-};
+#if defined(BOOST_USE_SEGMENTED_STACKS)
+# if ! defined(BOOST_WINDOWS)
+typedef boost::context::segmented   segemented;
+# endif
+#endif
 
 }}
 
@@ -33,4 +34,4 @@ struct coroutine {
 #  include BOOST_ABI_SUFFIX
 #endif
 
-#endif // BOOST_COROUTINES_COROUTINE_H
+#endif // BOOST_COROUTINES_SEGMENTED_H
