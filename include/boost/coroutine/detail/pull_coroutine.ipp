@@ -45,17 +45,15 @@ pull_coroutine< T >::pull_coroutine( Fn && fn, bool preserve_fpu) :
 
 template< typename T >
 template< typename StackAllocator, typename Fn >
-pull_coroutine< T >::pull_coroutine( StackAllocator salloc, Fn && fn_, bool preserve_fpu) :
+pull_coroutine< T >::pull_coroutine( StackAllocator salloc, Fn && fn, bool preserve_fpu) :
     other_( nullptr),
     caller_( boost::context::execution_context::current() ),
     callee_( salloc,
-             [=,&fn_](){
-                // create synthesized push_coroutine< T >
-                push_coroutine< T > synthesized( this);
-                other_ = & synthesized;
+             [=,&fn](){
                 try {
-                    // store coroutine-fn
-                    Fn fn( std::forward< Fn >( fn_) );
+                    // create synthesized push_coroutine< T >
+                    push_coroutine< T > synthesized( this);
+                    other_ = & synthesized;
                     // call coroutine-fn with synthesized pull_coroutine as argument
                     fn( synthesized);
                 } catch ( forced_unwind const&) {
@@ -136,17 +134,15 @@ pull_coroutine< T & >::pull_coroutine( Fn && fn, bool preserve_fpu) :
 
 template< typename T >
 template< typename StackAllocator, typename Fn >
-pull_coroutine< T & >::pull_coroutine( StackAllocator salloc, Fn && fn_, bool preserve_fpu) :
+pull_coroutine< T & >::pull_coroutine( StackAllocator salloc, Fn && fn, bool preserve_fpu) :
     other_( nullptr),
     caller_( boost::context::execution_context::current() ),
     callee_( salloc,
-             [=,&fn_](){
-                // create synthesized push_coroutine< T & >
-                push_coroutine< T & > synthesized( this);
-                other_ = & synthesized;
+             [=,&fn](){
                 try {
-                    // store coroutine-fn
-                    Fn fn( std::forward< Fn >( fn_) );
+                    // create synthesized push_coroutine< T & >
+                    push_coroutine< T & > synthesized( this);
+                    other_ = & synthesized;
                     // call coroutine-fn with synthesized pull_coroutine as argument
                     fn( synthesized);
                 } catch ( forced_unwind const&) {
@@ -224,17 +220,15 @@ pull_coroutine< void >::pull_coroutine( Fn && fn, bool preserve_fpu) :
 }
 
 template< typename StackAllocator, typename Fn >
-pull_coroutine< void >::pull_coroutine( StackAllocator salloc, Fn && fn_, bool preserve_fpu) :
+pull_coroutine< void >::pull_coroutine( StackAllocator salloc, Fn && fn, bool preserve_fpu) :
     other_( nullptr),
     caller_( boost::context::execution_context::current() ),
     callee_( salloc,
-             [=,&fn_](){
-                // create synthesized push_coroutine< void >
-                push_coroutine< void > synthesized( this);
-                other_ = & synthesized;
+             [=,&fn](){
                 try {
-                    // store coroutine-fn
-                    Fn fn( std::forward< Fn >( fn_) );
+                    // create synthesized push_coroutine< void >
+                    push_coroutine< void > synthesized( this);
+                    other_ = & synthesized;
                     // call coroutine-fn with synthesized pull_coroutine as argument
                     fn( synthesized);
                 } catch ( forced_unwind const&) {
