@@ -15,6 +15,7 @@
 #include <boost/assert.hpp>
 #include <boost/config.hpp>
 #include <boost/context/execution_context.hpp>
+#include <boost/intrusive_ptr.hpp>
 
 #include <boost/coroutine/detail/config.hpp>
 #include <boost/coroutine/detail/forced_unwind.hpp>
@@ -35,18 +36,13 @@ private:
     template< typename X >
     friend class push_coroutine;
 
-    push_coroutine< T >             *   other_;
-    boost::context::execution_context   caller_;
-    boost::context::execution_context   callee_;
-    bool                                preserve_fpu_;
-    int                                 state_;
-    std::exception_ptr                  except_;
+    struct control_block;
 
-    explicit pull_coroutine( push_coroutine< T > *);
+    boost::intrusive_ptr< control_block >    cb_;
 
-    bool has_result_() const {
-        return nullptr != other_->t_;
-    }
+    explicit pull_coroutine( control_block *);
+
+    bool has_result_() const;
 
 public:
     template< typename Fn >
@@ -55,18 +51,11 @@ public:
     template< typename StackAllocator, typename Fn >
     pull_coroutine( StackAllocator, Fn &&, bool = false);
 
-    ~pull_coroutine() {
-        if ( 0 == ( state_ & static_cast< int >( state_t::complete ) ) &&
-             0 != ( state_ & static_cast< int >( state_t::unwind) ) ) {
-            // set early-exit flag
-            state_ |= static_cast< int >( state_t::early_exit);
-            callee_.jump_to( preserve_fpu_);
-        }
-    }
+    ~pull_coroutine();
 
     pull_coroutine( pull_coroutine const&) = delete;
     pull_coroutine & operator=( pull_coroutine const&) = delete;
-/*
+
     pull_coroutine( pull_coroutine &&);
 
     pull_coroutine & operator=( pull_coroutine && rv) {
@@ -75,22 +64,18 @@ public:
         swap( tmp);
         return * this;
     }
-*/
+
     pull_coroutine & operator()();
 
-    explicit operator bool() const noexcept {
-        return nullptr != other_ && nullptr != other_->t_ && 0 == ( state_ & static_cast< int >( state_t::complete) );
-    }
+    explicit operator bool() const noexcept;
 
-    bool operator!() const noexcept {
-        return nullptr == other_ || nullptr == other_->t_ || 0 != ( state_ & static_cast< int >( state_t::complete) );
-    }
+    bool operator!() const noexcept;
 
-    T get() const noexcept {
-        return * other_->t_;
-    }
+    T get() const noexcept;
 
-//  void swap( pull_coroutine &) noexcept;
+    void swap( pull_coroutine & other) noexcept {
+        cb_.swap( other.cb_);
+    }
 
     class iterator : public std::iterator< std::input_iterator_tag, typename std::remove_reference< T >::type > {
     private:
@@ -154,11 +139,11 @@ public:
         }
 
         reference_t operator*() const {
-            return * c_->other_->t_;
+            return * c_->cb_->other->t;
         }
 
         pointer_t operator->() const {
-            return c_->other_->t_;
+            return c_->cb_->other->t;
         }
     };
 
@@ -171,18 +156,13 @@ private:
     template< typename X >
     friend class push_coroutine;
 
-    push_coroutine< T & >           *   other_;
-    boost::context::execution_context   caller_;
-    boost::context::execution_context   callee_;
-    bool                                preserve_fpu_;
-    int                                 state_;
-    std::exception_ptr                  except_;
+    struct control_block;
 
-    explicit pull_coroutine( push_coroutine< T & > *);
+    boost::intrusive_ptr< control_block >            cb_;
 
-    bool has_result_() const {
-        return nullptr != other_->t_;
-    }
+    explicit pull_coroutine( control_block *);
+
+    bool has_result_() const;
 
 public:
     template< typename Fn >
@@ -191,18 +171,11 @@ public:
     template< typename StackAllocator, typename Fn >
     pull_coroutine( StackAllocator, Fn &&, bool = false);
 
-    ~pull_coroutine() {
-        if ( 0 == ( state_ & static_cast< int >( state_t::complete ) ) &&
-             0 != ( state_ & static_cast< int >( state_t::unwind) ) ) {
-            // set early-exit flag
-            state_ |= static_cast< int >( state_t::early_exit);
-            callee_.jump_to( preserve_fpu_);
-        }
-    }
+    ~pull_coroutine();
 
     pull_coroutine( pull_coroutine const&) = delete;
     pull_coroutine & operator=( pull_coroutine const&) = delete;
-/*
+
     pull_coroutine( pull_coroutine &&);
 
     pull_coroutine & operator=( pull_coroutine && rv) {
@@ -211,22 +184,18 @@ public:
         swap( tmp);
         return * this;
     }
-*/
+
     pull_coroutine & operator()();
 
-    explicit operator bool() const noexcept {
-        return nullptr != other_ && nullptr != other_->t_ && 0 == ( state_ & static_cast< int >( state_t::complete) );
-    }
+    explicit operator bool() const noexcept;
 
-    bool operator!() const noexcept {
-        return nullptr == other_ || nullptr == other_->t_ || 0 != ( state_ & static_cast< int >( state_t::complete) );
-    }
+    bool operator!() const noexcept;
 
-    T & get() const noexcept {
-        return * other_->t_;
-    }
+    T & get() const noexcept;
 
-//  void swap( pull_coroutine &) noexcept;
+    void swap( pull_coroutine & other) noexcept {
+        cb_.swap( other.cb_);
+    }
 
     class iterator : public std::iterator< std::input_iterator_tag, typename std::remove_reference< T >::type > {
     private:
@@ -290,11 +259,11 @@ public:
         }
 
         reference_t operator*() const {
-            return * c_->other_->t_;
+            return * c_->cb_->other->t;
         }
 
         pointer_t operator->() const {
-            return c_->other_->t_;
+            return c_->cb_->other->t;
         }
     };
 
@@ -307,14 +276,11 @@ private:
     template< typename X >
     friend class push_coroutine;
 
-    push_coroutine< void >          *   other_;
-    boost::context::execution_context   caller_;
-    boost::context::execution_context   callee_;
-    bool                                preserve_fpu_;
-    int                                 state_;
-    std::exception_ptr                  except_;
+    struct control_block;
 
-    explicit pull_coroutine( push_coroutine< void > *);
+    boost::intrusive_ptr< control_block >            cb_;
+
+    explicit pull_coroutine( control_block *);
 
 public:
     template< typename Fn >
@@ -323,18 +289,11 @@ public:
     template< typename StackAllocator, typename Fn >
     pull_coroutine( StackAllocator, Fn &&, bool = false);
 
-    ~pull_coroutine() {
-        if ( 0 == ( state_ & static_cast< int >( state_t::complete ) ) &&
-             0 != ( state_ & static_cast< int >( state_t::unwind) ) ) {
-            // set early-exit flag
-            state_ |= static_cast< int >( state_t::early_exit);
-            callee_.jump_to( preserve_fpu_);
-        }
-    }
+    ~pull_coroutine();
 
     pull_coroutine( pull_coroutine const&) = delete;
     pull_coroutine & operator=( pull_coroutine const&) = delete;
-/*
+
     pull_coroutine( pull_coroutine &&);
 
     pull_coroutine & operator=( pull_coroutine && rv) {
@@ -343,18 +302,16 @@ public:
         swap( tmp);
         return * this;
     }
-*/
+
     pull_coroutine & operator()();
 
-    explicit operator bool() const noexcept {
-        return nullptr != other_ && 0 == ( state_ & static_cast< int >( state_t::complete) );
-    }
+    explicit operator bool() const noexcept;
 
-    bool operator!() const noexcept {
-        return nullptr == other_ || 0 != ( state_ & static_cast< int >( state_t::complete) );
-    }
+    bool operator!() const noexcept;
 
-//  void swap( pull_coroutine &) noexcept;
+    void swap( pull_coroutine & other) noexcept {
+        cb_.swap( other.cb_);
+    }
 };
 
 template< typename T >

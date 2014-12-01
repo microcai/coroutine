@@ -8,11 +8,14 @@
 #define BOOST_COROUTINES_DETAIL_PUSH_COROUTINE_HPP
 
 #include <exception>
+#include <iterator>
+#include <type_traits>
 #include <utility>
 
 #include <boost/assert.hpp>
 #include <boost/config.hpp>
 #include <boost/context/execution_context.hpp>
+#include <boost/intrusive_ptr.hpp>
 
 #include <boost/coroutine/detail/config.hpp>
 #include <boost/coroutine/detail/forced_unwind.hpp>
@@ -33,15 +36,11 @@ private:
     template< typename X >
     friend class pull_coroutine;
 
-    pull_coroutine< T >             *   other_;
-    boost::context::execution_context   caller_;
-    boost::context::execution_context   callee_;
-    bool                                preserve_fpu_;
-    int                                 state_;
-    std::exception_ptr                  except_;
-    T                               *   t_;
+    struct control_block;
 
-    explicit push_coroutine( pull_coroutine< T > *);
+    boost::intrusive_ptr< control_block >            cb_;
+
+    explicit push_coroutine( control_block *);
 
 public:
     template< typename Fn >
@@ -50,18 +49,11 @@ public:
     template< typename StackAllocator, typename Fn >
     push_coroutine( StackAllocator, Fn &&, bool = false);
 
-    ~push_coroutine() {
-        if ( 0 == ( state_ & static_cast< int >( state_t::complete ) ) &&
-             0 != ( state_ & static_cast< int >( state_t::unwind) ) ) {
-            // set early-exit flag
-            state_ |= static_cast< int >( state_t::early_exit);
-            callee_.jump_to( preserve_fpu_);
-        }
-    }
+    ~push_coroutine();
 
     push_coroutine( push_coroutine const&) = delete;
     push_coroutine & operator=( push_coroutine const&) = delete;
-/*
+
     push_coroutine( push_coroutine &&);
 
     push_coroutine & operator=( push_coroutine && rv) {
@@ -70,18 +62,16 @@ public:
         swap( tmp);
         return * this;
     }
-*/
+
     push_coroutine & operator()( T);
 
-    explicit operator bool() const noexcept {
-        return 0 == ( state_ & static_cast< int >( state_t::complete) );
-    }
+    explicit operator bool() const noexcept;
 
-    bool operator!() const noexcept {
-        return 0 != ( state_ & static_cast< int >( state_t::complete) );
-    }
+    bool operator!() const noexcept;
 
-//  void swap( push_coroutine &) noexcept;
+    void swap( push_coroutine & other) noexcept {
+        cb_.swap( other.cb_);
+    }
 
     class iterator : public std::iterator< std::output_iterator_tag, void, void, void, void > {
     private:
@@ -126,15 +116,11 @@ private:
     template< typename X >
     friend class pull_coroutine;
 
-    pull_coroutine< T & >           *   other_;
-    boost::context::execution_context   caller_;
-    boost::context::execution_context   callee_;
-    bool                                preserve_fpu_;
-    int                                 state_;
-    std::exception_ptr                  except_;
-    T                               *   t_;
+    struct control_block;
 
-    explicit push_coroutine( pull_coroutine< T & > *);
+    boost::intrusive_ptr< control_block >            cb_;
+
+    explicit push_coroutine( control_block *);
 
 public:
     template< typename Fn >
@@ -143,18 +129,11 @@ public:
     template< typename StackAllocator, typename Fn >
     push_coroutine( StackAllocator, Fn &&, bool = false);
 
-    ~push_coroutine() {
-        if ( 0 == ( state_ & static_cast< int >( state_t::complete ) ) &&
-             0 != ( state_ & static_cast< int >( state_t::unwind) ) ) {
-            // set early-exit flag
-            state_ |= static_cast< int >( state_t::early_exit);
-            callee_.jump_to( preserve_fpu_);
-        }
-    }
+    ~push_coroutine();
 
     push_coroutine( push_coroutine const&) = delete;
     push_coroutine & operator=( push_coroutine const&) = delete;
-/*
+
     push_coroutine( push_coroutine &&);
 
     push_coroutine & operator=( push_coroutine && rv) {
@@ -163,18 +142,16 @@ public:
         swap( tmp);
         return * this;
     }
-*/
+
     push_coroutine & operator()( T &);
 
-    explicit operator bool() const noexcept {
-        return 0 == ( state_ & static_cast< int >( state_t::complete) );
-    }
+    explicit operator bool() const noexcept;
 
-    bool operator!() const noexcept {
-        return 0 != ( state_ & static_cast< int >( state_t::complete) );
-    }
+    bool operator!() const noexcept;
 
-//  void swap( push_coroutine &) noexcept;
+    void swap( push_coroutine & other) noexcept {
+        cb_.swap( other.cb_);
+    }
 
     class iterator : public std::iterator< std::output_iterator_tag, void, void, void, void > {
     private:
@@ -219,14 +196,11 @@ private:
     template< typename X >
     friend class pull_coroutine;
 
-    pull_coroutine< void >          *   other_;
-    boost::context::execution_context   caller_;
-    boost::context::execution_context   callee_;
-    bool                                preserve_fpu_;
-    int                                 state_;
-    std::exception_ptr                  except_;
+    struct control_block;
 
-    explicit push_coroutine( pull_coroutine< void > *);
+    boost::intrusive_ptr< control_block >            cb_;
+
+    explicit push_coroutine( control_block *);
 
 public:
     template< typename Fn >
@@ -235,18 +209,11 @@ public:
     template< typename StackAllocator, typename Fn >
     push_coroutine( StackAllocator, Fn &&, bool = false);
 
-    ~push_coroutine() {
-        if ( 0 == ( state_ & static_cast< int >( state_t::complete ) ) &&
-             0 != ( state_ & static_cast< int >( state_t::unwind) ) ) {
-            // set early-exit flag
-            state_ |= static_cast< int >( state_t::early_exit);
-            callee_.jump_to( preserve_fpu_);
-        }
-    }
+    ~push_coroutine();
 
     push_coroutine( push_coroutine const&) = delete;
     push_coroutine & operator=( push_coroutine const&) = delete;
-/*
+
     push_coroutine( push_coroutine &&);
 
     push_coroutine & operator=( push_coroutine && rv) {
@@ -255,18 +222,16 @@ public:
         swap( tmp);
         return * this;
     }
-*/
+
     push_coroutine & operator()();
 
-    explicit operator bool() const noexcept {
-        return 0 == ( state_ & static_cast< int >( state_t::complete) );
-    }
+    explicit operator bool() const noexcept;
 
-    bool operator!() const noexcept {
-        return 0 != ( state_ & static_cast< int >( state_t::complete) );
-    }
+    bool operator!() const noexcept;
 
-//  void swap( push_coroutine &) noexcept;
+    void swap( push_coroutine & other) noexcept {
+        cb_.swap( other.cb_);
+    }
 };
 
 template< typename T >

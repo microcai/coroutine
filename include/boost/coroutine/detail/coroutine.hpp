@@ -28,6 +28,9 @@ class push_coroutine;
 #include <boost/coroutine/detail/pull_coroutine.hpp>
 #include <boost/coroutine/detail/push_coroutine.hpp>
 
+#include <boost/coroutine/detail/pull_control_block.hpp>
+#include <boost/coroutine/detail/push_control_block.hpp>
+
 #include <boost/coroutine/detail/pull_coroutine.ipp>
 #include <boost/coroutine/detail/push_coroutine.ipp>
 

@@ -27,14 +27,61 @@ namespace boost {
 namespace coroutines {
 namespace detail {
 
+// pull_coroutine< T >
+
 template< typename T >
-pull_coroutine< T >::pull_coroutine( push_coroutine< T > * other) :
-    other_( other),
-    caller_( other_->callee_),
-    callee_( other_->caller_),
-    preserve_fpu_( other_->preserve_fpu_),
-    state_( 0),
-    except_() {
+template< typename StackAllocator, typename Fn >
+pull_coroutine< T >::control_block::control_block( StackAllocator salloc, Fn && fn_, bool preserve_fpu_) :
+    use_count( 0),
+    other( nullptr),
+    caller( boost::context::execution_context::current() ),
+    callee( salloc,
+             [=,&fn_](){
+                try {
+                    // create synthesized push_coroutine< T >
+                    typename push_coroutine< T >::control_block synthesized_cb( this);
+                    push_coroutine< T > synthesized( & synthesized_cb);
+                    other = & synthesized_cb;
+                    // call coroutine-fn with synthesized pull_coroutine as argument
+                    Fn fn( std::forward< Fn >( fn_) );
+                    fn( synthesized);
+                } catch ( forced_unwind const&) {
+                    // do nothing for unwinding exception
+                } catch (...) {
+                    // store other exceptions in exception-pointer
+                    except = std::current_exception();
+                }
+                // set termination flags
+                state |= static_cast< int >( state_t::complete);
+                // jump back to caller
+                caller.jump_to( preserve_fpu);
+                BOOST_ASSERT_MSG( false, "pull_coroutine is complete");
+            }),
+    preserve_fpu( preserve_fpu_),
+    state( static_cast< int >( state_t::unwind) ),
+    except() {
+}
+
+template< typename T >
+pull_coroutine< T >::control_block::control_block( typename push_coroutine< T >::control_block * cb) :
+    use_count( 1),
+    other( cb),
+    caller( other->callee),
+    callee( other->caller),
+    preserve_fpu( other->preserve_fpu),
+    state( 0),
+    except() {
+}
+
+template< typename T >
+pull_coroutine< T >::pull_coroutine( control_block * cb) :
+    cb_( cb) {
+}
+
+template< typename T >
+bool
+pull_coroutine< T >::has_result_() const {
+    return nullptr != cb_->other->t;
 }
 
 template< typename T >
@@ -46,84 +93,115 @@ pull_coroutine< T >::pull_coroutine( Fn && fn, bool preserve_fpu) :
 template< typename T >
 template< typename StackAllocator, typename Fn >
 pull_coroutine< T >::pull_coroutine( StackAllocator salloc, Fn && fn, bool preserve_fpu) :
-    other_( nullptr),
-    caller_( boost::context::execution_context::current() ),
-    callee_( salloc,
-             [=,&fn](){
-                try {
-                    // create synthesized push_coroutine< T >
-                    push_coroutine< T > synthesized( this);
-                    other_ = & synthesized;
-                    // call coroutine-fn with synthesized pull_coroutine as argument
-                    fn( synthesized);
-                } catch ( forced_unwind const&) {
-                    // do nothing for unwinding exception
-                } catch (...) {
-                    // store other exceptions in exception-pointer
-                    except_ = std::current_exception();
-                }
-                // set termination flags
-                state_ |= static_cast< int >( state_t::complete);
-                // jump back to caller
-                caller_.jump_to( preserve_fpu_);
-                BOOST_ASSERT_MSG( false, "pull_coroutine is complete");
-            }),
-    preserve_fpu_( preserve_fpu),
-    state_( static_cast< int >( state_t::unwind) ),
-    except_() {
-    callee_.jump_to( preserve_fpu_);
+    cb_( new control_block( salloc, std::forward< Fn >( fn), preserve_fpu) ) {
+    cb_->callee.jump_to( cb_->preserve_fpu);
+}
+
+template< typename T >
+pull_coroutine< T >::~pull_coroutine() {
+    if ( nullptr != cb_ &&
+         0 == ( cb_->state & static_cast< int >( state_t::complete ) ) &&
+         0 != ( cb_->state & static_cast< int >( state_t::unwind) ) ) {
+        // set early-exit flag
+        cb_->state |= static_cast< int >( state_t::early_exit);
+        cb_->callee.jump_to( cb_->preserve_fpu);
+    }
 }
 
 template< typename T >
 pull_coroutine< T > & 
 pull_coroutine< T >::operator()() {
-    callee_.jump_to( preserve_fpu_);
-    if ( except_) {
-        std::rethrow_exception( except_);
+    cb_->callee.jump_to( cb_->preserve_fpu);
+    if ( cb_->except) {
+        std::rethrow_exception( cb_->except);
     }
     // test early-exit-flag
-    if ( 0 != ( ( other_->state_) & static_cast< int >( state_t::early_exit) ) ) {
+    if ( 0 != ( ( cb_->other->state) & static_cast< int >( state_t::early_exit) ) ) {
         throw forced_unwind();
     }
     return * this;
 }
 
-/*
+template< typename T >
+pull_coroutine< T >::operator bool() const noexcept {
+    return nullptr != cb_ && nullptr != cb_->other && nullptr != cb_->other->t && 0 == ( cb_->state & static_cast< int >( state_t::complete) );
+}
+
+template< typename T >
+bool
+pull_coroutine< T >::operator!() const noexcept {
+    return nullptr == cb_ || nullptr == cb_->other || nullptr == cb_->other->t || 0 != ( cb_->state & static_cast< int >( state_t::complete) );
+}
+
+template< typename T >
+T
+pull_coroutine< T >::get() const noexcept {
+    return * cb_->other->t;
+}
+
+
 template< typename T >
 pull_coroutine< T >::pull_coroutine( pull_coroutine && rv) :
-    other_( nullptr),
-    caller_( std::move( rv.caller_) ),
-    callee_( std::move( rv.callee_) ),
-    preserve_fpu_( std::move( rv.preserve_fpu_) ),
-    state_( static_cast< int >( state_t::complete) ),
-    except_() {
-    std::swap( other_, rv.other_);
-    std::swap( state_, rv.state_);
-    std::swap( except_, rv.except_);
-    other_->other_ = this;
+    cb_() {
+    swap( rv);
+}
+
+
+// pull_coroutine< T & >
+
+template< typename T >
+template< typename StackAllocator, typename Fn >
+pull_coroutine< T & >::control_block::control_block( StackAllocator salloc, Fn && fn_, bool preserve_fpu_) :
+    use_count( 0),
+    other( nullptr),
+    caller( boost::context::execution_context::current() ),
+    callee( salloc,
+             [=,&fn_](){
+                try {
+                    // create synthesized push_coroutine< T >
+                    typename push_coroutine< T & >::control_block synthesized_cb( this);
+                    push_coroutine< T & > synthesized( & synthesized_cb);
+                    other = & synthesized_cb;
+                    // call coroutine-fn with synthesized pull_coroutine as argument
+                    Fn fn( std::forward< Fn >( fn_) );
+                    fn( synthesized);
+                } catch ( forced_unwind const&) {
+                    // do nothing for unwinding exception
+                } catch (...) {
+                    // store other exceptions in exception-pointer
+                    except = std::current_exception();
+                }
+                // set termination flags
+                state |= static_cast< int >( state_t::complete);
+                // jump back to caller
+                caller.jump_to( preserve_fpu);
+                BOOST_ASSERT_MSG( false, "pull_coroutine is complete");
+            }),
+    preserve_fpu( preserve_fpu_),
+    state( static_cast< int >( state_t::unwind) ),
+    except() {
 }
 
 template< typename T >
-void
-pull_coroutine< T >::swap( pull_coroutine & lv) noexcept {
-    std::swap( other_, lv.other_);
-    std::swap( caller_, lv.caller_);
-    std::swap( callee_, lv.callee_);
-    std::swap( preserve_fpu_, lv.preserve_fpu_);
-    std::swap( state_, lv.state_);
-    std::swap( except_, lv.except_);
-    other_->other_ = this;
+pull_coroutine< T & >::control_block::control_block( typename push_coroutine< T & >::control_block * cb) :
+    use_count( 1),
+    other( cb),
+    caller( other->callee),
+    callee( other->caller),
+    preserve_fpu( other->preserve_fpu),
+    state( 0),
+    except() {
 }
-*/
 
 template< typename T >
-pull_coroutine< T & >::pull_coroutine( push_coroutine< T & > * other) :
-    other_( other),
-    caller_( other_->callee_),
-    callee_( other_->caller_),
-    preserve_fpu_( other_->preserve_fpu_),
-    state_( 0),
-    except_() {
+pull_coroutine< T & >::pull_coroutine( control_block * cb) :
+    cb_( cb) {
+}
+
+template< typename T >
+bool
+pull_coroutine< T & >::has_result_() const {
+    return nullptr != cb_->other->t;
 }
 
 template< typename T >
@@ -135,83 +213,106 @@ pull_coroutine< T & >::pull_coroutine( Fn && fn, bool preserve_fpu) :
 template< typename T >
 template< typename StackAllocator, typename Fn >
 pull_coroutine< T & >::pull_coroutine( StackAllocator salloc, Fn && fn, bool preserve_fpu) :
-    other_( nullptr),
-    caller_( boost::context::execution_context::current() ),
-    callee_( salloc,
-             [=,&fn](){
-                try {
-                    // create synthesized push_coroutine< T & >
-                    push_coroutine< T & > synthesized( this);
-                    other_ = & synthesized;
-                    // call coroutine-fn with synthesized pull_coroutine as argument
-                    fn( synthesized);
-                } catch ( forced_unwind const&) {
-                    // do nothing for unwinding exception
-                } catch (...) {
-                    // store other exceptions in exception-pointer
-                    except_ = std::current_exception();
-                }
-                // set termination flags
-                state_ |= static_cast< int >( state_t::complete);
-                // jump back to caller
-                caller_.jump_to( preserve_fpu_);
-                BOOST_ASSERT_MSG( false, "pull_coroutine is complete");
-            }),
-    preserve_fpu_( preserve_fpu),
-    state_( static_cast< int >( state_t::unwind) ),
-    except_() {
-    callee_.jump_to( preserve_fpu_);
+    cb_( new control_block( salloc, std::forward< Fn >( fn), preserve_fpu) ) {
+    cb_->callee.jump_to( cb_->preserve_fpu);
+}
+
+template< typename T >
+pull_coroutine< T & >::~pull_coroutine() {
+    if ( nullptr != cb_ &&
+         0 == ( cb_->state & static_cast< int >( state_t::complete ) ) &&
+         0 != ( cb_->state & static_cast< int >( state_t::unwind) ) ) {
+        // set early-exit flag
+        cb_->state |= static_cast< int >( state_t::early_exit);
+        cb_->callee.jump_to( cb_->preserve_fpu);
+    }
 }
 
 template< typename T >
 pull_coroutine< T & > &
 pull_coroutine< T & >::operator()() {
-    callee_.jump_to( preserve_fpu_);
-    if ( except_) {
-        std::rethrow_exception( except_);
+    cb_->callee.jump_to( cb_->preserve_fpu);
+    if ( cb_->except) {
+        std::rethrow_exception( cb_->except);
     }
     // test early-exit-flag
-    if ( 0 != ( ( other_->state_) & static_cast< int >( state_t::early_exit) ) ) {
+    if ( 0 != ( ( cb_->other->state) & static_cast< int >( state_t::early_exit) ) ) {
         throw forced_unwind();
     }
     return * this;
 }
 
-/*
+template< typename T >
+pull_coroutine< T & >::operator bool() const noexcept {
+    return nullptr != cb_ && nullptr != cb_->other && nullptr != cb_->other->t && 0 == ( cb_->state & static_cast< int >( state_t::complete) );
+}
+
+template< typename T >
+bool
+pull_coroutine< T & >::operator!() const noexcept {
+    return nullptr == cb_ || nullptr == cb_->other || nullptr == cb_->other->t || 0 != ( cb_->state & static_cast< int >( state_t::complete) );
+}
+
+template< typename T >
+T &
+pull_coroutine< T & >::get() const noexcept {
+    return * cb_->other->t;
+}
+
+
 template< typename T >
 pull_coroutine< T & >::pull_coroutine( pull_coroutine && rv) :
-    other_( nullptr),
-    caller_( std::move( rv.caller_) ),
-    callee_( std::move( rv.callee_) ),
-    preserve_fpu_( std::move( rv.preserve_fpu_) ),
-    state_( static_cast< int >( state_t::complete) ),
-    except_() {
-    std::swap( other_, rv.other_);
-    std::swap( state_, rv.state_);
-    std::swap( except_, rv.except_);
-    other_->other_ = this;
+    cb_() {
+    swap( rv);
 }
 
-template< typename T >
-void
-pull_coroutine< T & >::swap( pull_coroutine & lv) noexcept {
-    std::swap( other_, lv.other_);
-    std::swap( caller_, lv.caller_);
-    std::swap( callee_, lv.callee_);
-    std::swap( preserve_fpu_, lv.preserve_fpu_);
-    std::swap( state_, lv.state_);
-    std::swap( except_, lv.except_);
-    other_->other_ = this;
-}
-*/
 
-pull_coroutine< void >::pull_coroutine( push_coroutine< void > * other) :
-    other_( other),
-    caller_( other_->callee_),
-    callee_( other_->caller_),
-    preserve_fpu_( other_->preserve_fpu_),
-    state_( 0),
-    except_() {
+// pull_coroutine< void >
+
+template< typename StackAllocator, typename Fn >
+pull_coroutine< void >::control_block::control_block( StackAllocator salloc, Fn && fn_, bool preserve_fpu_) :
+    use_count( 0),
+    other( nullptr),
+    caller( boost::context::execution_context::current() ),
+    callee( salloc,
+             [=,&fn_](){
+                try {
+                    // create synthesized push_coroutine< T >
+                    typename push_coroutine< void >::control_block synthesized_cb( this);
+                    push_coroutine< void > synthesized( & synthesized_cb);
+                    other = & synthesized_cb;
+                    // call coroutine-fn with synthesized pull_coroutine as argument
+                    Fn fn( std::forward< Fn >( fn_) );
+                    fn( synthesized);
+                } catch ( forced_unwind const&) {
+                    // do nothing for unwinding exception
+                } catch (...) {
+                    // store other exceptions in exception-pointer
+                    except = std::current_exception();
+                }
+                // set termination flags
+                state |= static_cast< int >( state_t::complete);
+                // jump back to caller
+                caller.jump_to( preserve_fpu);
+                BOOST_ASSERT_MSG( false, "pull_coroutine is complete");
+            }),
+    preserve_fpu( preserve_fpu_),
+    state( static_cast< int >( state_t::unwind) ),
+    except() {
+}
+
+pull_coroutine< void >::control_block::control_block( typename push_coroutine< void >::control_block * cb) :
+    use_count( 1),
+    other( cb),
+    caller( other->callee),
+    callee( other->caller),
+    preserve_fpu( other->preserve_fpu),
+    state( 0),
+    except() {
+}
+
+pull_coroutine< void >::pull_coroutine( control_block * cb) :
+    cb_( cb) {
 }
 
 template< typename Fn >
@@ -221,72 +322,47 @@ pull_coroutine< void >::pull_coroutine( Fn && fn, bool preserve_fpu) :
 
 template< typename StackAllocator, typename Fn >
 pull_coroutine< void >::pull_coroutine( StackAllocator salloc, Fn && fn, bool preserve_fpu) :
-    other_( nullptr),
-    caller_( boost::context::execution_context::current() ),
-    callee_( salloc,
-             [=,&fn](){
-                try {
-                    // create synthesized push_coroutine< void >
-                    push_coroutine< void > synthesized( this);
-                    other_ = & synthesized;
-                    // call coroutine-fn with synthesized pull_coroutine as argument
-                    fn( synthesized);
-                } catch ( forced_unwind const&) {
-                    // do nothing for unwinding exception
-                } catch (...) {
-                    // store other exceptions in exception-pointer
-                    except_ = std::current_exception();
-                }
-                // set termination flags
-                state_ |= static_cast< int >( state_t::complete);
-                // jump back to caller
-                caller_.jump_to( preserve_fpu_);
-                BOOST_ASSERT_MSG( false, "pull_coroutine is complete");
-            }),
-    preserve_fpu_( preserve_fpu),
-    state_( static_cast< int >( state_t::unwind) ),
-    except_() {
-    callee_.jump_to( preserve_fpu_);
+    cb_( new control_block( salloc, std::forward< Fn >( fn), preserve_fpu) ) {
+    cb_->callee.jump_to( cb_->preserve_fpu);
+}
+
+pull_coroutine< void >::~pull_coroutine() {
+    if ( nullptr != cb_ &&
+         0 == ( cb_->state & static_cast< int >( state_t::complete ) ) &&
+         0 != ( cb_->state & static_cast< int >( state_t::unwind) ) ) {
+        // set early-exit flag
+        cb_->state |= static_cast< int >( state_t::early_exit);
+        cb_->callee.jump_to( cb_->preserve_fpu);
+    }
 }
 
 pull_coroutine< void > &
 pull_coroutine< void >::operator()() {
-    callee_.jump_to( preserve_fpu_);
-    if ( except_) {
-        std::rethrow_exception( except_);
+    cb_->callee.jump_to( cb_->preserve_fpu);
+    if ( cb_->except) {
+        std::rethrow_exception( cb_->except);
     }
     // test early-exit-flag
-    if ( 0 != ( ( other_->state_) & static_cast< int >( state_t::early_exit) ) ) {
+    if ( 0 != ( ( cb_->other->state) & static_cast< int >( state_t::early_exit) ) ) {
         throw forced_unwind();
     }
     return * this;
 }
 
-/*
-pull_coroutine< void >::pull_coroutine( pull_coroutine && rv) :
-    other_( nullptr),
-    caller_( std::move( rv.caller_) ),
-    callee_( std::move( rv.callee_) ),
-    preserve_fpu_( std::move( rv.preserve_fpu_) ),
-    state_( static_cast< int >( state_t::complete) ),
-    except_() {
-    std::swap( other_, rv.other_);
-    std::swap( state_, rv.state_);
-    std::swap( except_, rv.except_);
-    other_->other_ = this;
+pull_coroutine< void >::operator bool() const noexcept {
+    return nullptr != cb_ && nullptr != cb_->other && 0 == ( cb_->state & static_cast< int >( state_t::complete) );
 }
 
-void
-pull_coroutine< void >::swap( pull_coroutine & lv) noexcept {
-    std::swap( other_, lv.other_);
-    std::swap( caller_, lv.caller_);
-    std::swap( callee_, lv.callee_);
-    std::swap( preserve_fpu_, lv.preserve_fpu_);
-    std::swap( state_, lv.state_);
-    std::swap( except_, lv.except_);
-    other_->other_ = this;
+bool
+pull_coroutine< void >::operator!() const noexcept {
+    return nullptr == cb_ || nullptr == cb_->other || 0 != ( cb_->state & static_cast< int >( state_t::complete) );
 }
-*/
+
+
+pull_coroutine< void >::pull_coroutine( pull_coroutine && rv) :
+    cb_() {
+    swap( rv);
+}
 
 }}}
 
