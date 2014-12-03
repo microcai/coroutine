@@ -34,6 +34,9 @@ class push_coroutine;
 #include <boost/coroutine/detail/pull_coroutine.ipp>
 #include <boost/coroutine/detail/push_coroutine.ipp>
 
+#include <boost/coroutine/detail/pull_control_block.ipp>
+#include <boost/coroutine/detail/push_control_block.ipp>
+
 #ifdef BOOST_HAS_ABI_HEADERS
 #  include BOOST_ABI_SUFFIX
 #endif

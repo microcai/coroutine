@@ -36,6 +36,15 @@ struct push_coroutine< T >::control_block {
 
     explicit control_block( typename pull_coroutine< T >::control_block *);
 
+    ~control_block();
+
+    control_block( control_block &) = delete;
+    control_block & operator=( control_block &) = delete;
+
+    void jump_to( T);
+
+    bool valid() const noexcept;
+
     friend void intrusive_ptr_add_ref( control_block * cb) {
         ++cb->use_count;
     }
@@ -63,6 +72,15 @@ struct push_coroutine< T & >::control_block {
 
     explicit control_block( typename pull_coroutine< T & >::control_block *);
 
+    ~control_block();
+
+    control_block( control_block &) = delete;
+    control_block & operator=( control_block &) = delete;
+
+    void jump_to( T &);
+
+    bool valid() const noexcept;
+
     friend void intrusive_ptr_add_ref( control_block * cb) {
         ++cb->use_count;
     }
@@ -87,6 +105,15 @@ struct push_coroutine< void >::control_block {
     control_block( StackAllocator, Fn &&, bool);
 
     explicit control_block( typename pull_coroutine< void >::control_block *);
+
+    ~control_block();
+
+    control_block( control_block &) = delete;
+    control_block & operator=( control_block &) = delete;
+
+    void jump_to();
+
+    bool valid() const noexcept;
 
     friend void intrusive_ptr_add_ref( control_block * cb) {
         ++cb->use_count;
